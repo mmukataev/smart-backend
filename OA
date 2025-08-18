@@ -1,0 +1,30 @@
+                       List of relations
+ Schema |              Name              | Type  |    Owner    
+--------+--------------------------------+-------+-------------
+ public | admission_user_role            | table | psql_admin1
+ public | auth_group                     | table | psql_admin1
+ public | auth_group_permissions         | table | psql_admin1
+ public | auth_permission                | table | psql_admin1
+ public | auth_user                      | table | psql_admin1
+ public | auth_user_groups               | table | psql_admin1
+ public | auth_user_user_permissions     | table | psql_admin1
+ public | byuropass_user_role            | table | psql_admin1
+ public | django_admin_log               | table | psql_admin1
+ public | django_content_type            | table | psql_admin1
+ public | django_migrations              | table | psql_admin1
+ public | django_session                 | table | psql_admin1
+ public | icademium_user_role            | table | psql_admin1
+ public | regapa_user_role               | table | psql_admin1
+ public | regtesting_user_role           | table | psql_admin1
+ public | smart_apa_api_department       | table | psql_admin1
+ public | smart_apa_api_employee         | table | psql_admin1
+ public | smart_apa_api_position         | table | psql_admin1
+ public | smart_apa_api_region           | table | psql_admin1
+ public | smart_apa_api_regiondepartment | table | psql_admin1
+ public | smart_apa_api_regionemployee   | table | psql_admin1
+ public | smart_apa_api_regionposition   | table | psql_admin1
+ public | smart_apa_api_sector           | table | psql_admin1
+ public | smart_apa_api_subordination    | table | psql_admin1
+ public | smart_apa_user_role            | table | psql_admin1
+(25 rows)
+
