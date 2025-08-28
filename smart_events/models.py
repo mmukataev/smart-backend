@@ -4,10 +4,16 @@ from smart_apa_api.models import Employee
 class Event(models.Model):
     ACADEMY_EVENTS = 'academy_events'
     NEWS = 'news'
+    VACATION = 'vacation'
+    MISSION = 'mission'
+    HOLIDAY = 'holiday'
 
     EVENT_TYPE_CHOICES = [
         (ACADEMY_EVENTS, 'Academy Events'),
         (NEWS, 'News'),
+        (VACATION, 'Vacation'),
+        (MISSION, 'Mission'),
+        (HOLIDAY, 'Holiday'),
     ]
 
     type = models.CharField(
@@ -18,7 +24,9 @@ class Event(models.Model):
     date = models.DateField()
     time = models.TimeField()
     title = models.CharField(max_length=255)
+    title_kz = models.CharField(max_length=255)
     description = models.TextField()
+    description_kz = models.TextField()
 
     image = models.ImageField(upload_to='events/', blank=True, null=True) 
 

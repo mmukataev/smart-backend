@@ -3,6 +3,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .models import Event
 from .serializers import EventSerializer
 from collections import Counter
+from collections import defaultdict
 from django.http import JsonResponse
 
 from django.db.models import Count
@@ -23,6 +24,7 @@ from smart_events.models import Event, Comment, Like, BirthdayMessage, BirthdayM
 from smart_apa_api.models import Employee
 from .serializers import EventSerializer
 from smart_apa_api.serializers import EmployeeSerializer
+from smart_events.serializers import EventWithStatsSerializer, LikeSerializer, BirthdayMessageSerializer, EventCreateSerializer, EventUpdateSerializer, EmployeeWithBirthdaySerializer, EventWithBirthdaysSerializer, EmployeeShortSerializer, CommentSerializer, AddCommentSerializer, CommentSerializer
 
 from datetime import datetime
 
@@ -32,194 +34,136 @@ class EventViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['date']
 
+class EventCreateAPIView(APIView):
+    def post(self, request):
+        serializer = EventCreateSerializer(data=request.data)
+        if serializer.is_valid():
+            event = serializer.save()
+            return Response({
+                "message": "Event created successfully",
+                "event": EventCreateSerializer(event).data
+            }, status=status.HTTP_201_CREATED)
+
+        # Собираем безопасный словарь для JSON
+        data_received_safe = dict(request.data)
+        if 'image' in data_received_safe:
+            data_received_safe['image'] = str(data_received_safe['image'])
+
+        return Response({
+            "message": "Validation failed",
+            "errors": serializer.errors,
+            "data_received": data_received_safe
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+class EventUpdateAPIView(APIView):
+    def put(self, request, pk):
+        try:
+            event = Event.objects.get(pk=pk)
+        except Event.DoesNotExist:
+            return Response({"message": "Событие не найдено"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = EventUpdateSerializer(event, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 class EventWithBirthdaysAPIView(APIView):
     def get(self, request):
         date_str = request.query_params.get('date')
         if not date_str:
             return Response({'error': 'Date is required'}, status=400)
 
-        try:
-            date_obj = parse_date(date_str)
-            if not date_obj:
-                raise ValueError
-        except ValueError:
+        date_obj = parse_date(date_str)
+        if not date_obj:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
 
-        # Получаем события по дате
-        events = Event.objects.filter(date=date_obj).order_by('time')
-        events_data = EventSerializer(events, many=True).data
-
-        # Получаем список ID событий
-        event_ids = [event['id'] for event in events_data]
-
-        # Подсчёт комментариев и лайков к событиям
-        comment_counts = Counter(Comment.objects.filter(event_id__in=event_ids).values_list('event_id', flat=True))
-        like_counts = Counter(Like.objects.filter(event_id__in=event_ids).values_list('event_id', flat=True))
-
-        for event in events_data:
-            event['comments_count'] = comment_counts.get(event['id'], 0)
-            event['likes_count'] = like_counts.get(event['id'], 0)
-
-        # Сотрудники с ДР
-        employees = Employee.objects.filter(
-            birth_date__month=date_obj.month,
-            birth_date__day=date_obj.day
+        serializer = EventWithBirthdaysSerializer(
+            {'date': date_obj}, 
+            context={'date': date_obj}
         )
-
-        birth_year = date_obj.year
-
-        # Подсчёт комментов и лайков к ДР
-        birthday_comment_counts = Counter(
-            Comment.objects.filter(
-                birthday_employee_id__in=employees.values_list('id', flat=True),
-                birth_year=birth_year,
-                event_id__isnull=True
-            ).values_list('birthday_employee_id', flat=True)
-        )
-
-        birthday_like_counts = Counter(
-            Like.objects.filter(
-                birthday_employee_id__in=employees.values_list('id', flat=True),
-                birth_year=birth_year,
-                event_id__isnull=True
-            ).values_list('birthday_employee_id', flat=True)
-        )
-
-        messages = list(BirthdayMessage.objects.all())
-        messages_count = len(messages)
-
-        employees_data = []
-        for i, employee in enumerate(employees):
-            # Пропускаем сотрудников без ID
-            if not employee.id:
-                continue
-
-            emp_data = EmployeeSerializer(employee).data
-            emp_data['birthday_comments_count'] = birthday_comment_counts.get(employee.id, 0)
-            emp_data['birthday_likes_count'] = birthday_like_counts.get(employee.id, 0)
-
-            try:
-                message_used = BirthdayMessageUsed.objects.get(
-                    birthday_employee_id=employee.id,
-                    birth_year=birth_year
-                )
-            except BirthdayMessageUsed.DoesNotExist:
-                message_used = None
-                if messages_count > 0:
-                    index = i % messages_count
-                    message = messages[index]
-                    message_used = BirthdayMessageUsed.objects.create(
-                        birthday_employee_id=employee.id,
-                        birth_year=birth_year,
-                        message=message
-                    )
-
-            emp_data['birthday_message_ru'] = (
-                message_used.message.text_ru if message_used else None
-            )
-            emp_data['birthday_message_kz'] = (
-                message_used.message.text_kz if message_used else None
-            )
-
-            employees_data.append(emp_data)
-
-
-
-        return Response({
-            'events': events_data,
-            'birthdays': employees_data
-        })
-
+        return Response(serializer.data)
 
 def get_comments_by_event(request, event_id):
-    comments = Comment.objects.filter(event_id=event_id).order_by('created_at')
+    comments = list(Comment.objects.filter(event_id=event_id).order_by('created_at'))
 
-    # Сначала делаем словарь комментариев по ID
-    comment_map = {}
-    for comment in comments:
-        comment_map[comment.id] = comment
-
-    # Словарь для хранения вложенности
-    comment_tree = {}
-
-    # Отдельный список для корневых комментариев
+    # Группируем ответы по comment_id
+    replies_map = defaultdict(list)
     root_comments = []
-
-    for comment in comments:
-        try:
-            employee = Employee.objects.get(id=comment.employee_id)
-            employee_data = {
-                'id': employee.id,
-                'full_name': f"{employee.user_surename} {employee.user_name} {employee.user_patronymic or ''}".strip(),
-                'photo': request.build_absolute_uri(employee.user_image.url) if employee.user_image else None,
-            }
-        except Employee.DoesNotExist:
-            employee_data = {
-                'id': comment.employee_id,
-                'full_name': None,
-                'photo': None,
-            }
-
-        comment_data = {
-            'id': comment.id,
-            'event_id': comment.event_id,
-            'employee': employee_data,
-            'text': comment.text,
-            'created_at': comment.created_at,
-            'replies': []
-        }
-
-        if comment.comment_id:  # Это ответ
-            parent = comment_tree.get(comment.comment_id)
-            if parent:
-                parent['replies'].append(comment_data)
-            else:
-                # если родитель ещё не добавлен, сохраняем временно
-                comment_tree.setdefault(comment.comment_id, {'replies': []})['replies'].append(comment_data)
+    for c in comments:
+        if c.comment_id:
+            replies_map[c.comment_id].append(c)
         else:
-            root_comments.append(comment_data)
-            comment_tree[comment.id] = comment_data
+            root_comments.append(c)
 
-    return JsonResponse(root_comments, safe=False)
+    serializer = CommentSerializer(
+        root_comments, many=True,
+        context={'request': request, 'replies_map': replies_map}
+    )
+    return JsonResponse(serializer.data, safe=False)
 
-class EventDetailAPIView(APIView):
-    def get(self, request, event_id):  # 👈 добавляем event_id сюда
-        event = get_object_or_404(Event, id=event_id)
-        event_data = EventSerializer(event).data
+class BirthdaysInMonthAPIView(APIView):
+    """
+    Возвращает сотрудников с днями рождения в месяце указанной даты.
+    """
+    def get(self, request):
+        date_str = request.query_params.get('date')
+        if not date_str:
+            return Response({'error': 'Date is required'}, status=400)
 
-        # Подсчёт комментариев
-        comments = Comment.objects.filter(event_id=event.id).order_by('-created_at')
-        comment_counts = comments.count()
+        date_obj = parse_date(date_str)
+        if not date_obj:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
 
-        # Подсчёт лайков
-        like_counts = Like.objects.filter(event_id=event.id).count()
+        month = date_obj.month
+        year = date_obj.year
 
-        # Список комментариев с данными сотрудников
-        comments_data = []
-        for comment in comments:
-            try:
-                employee = Employee.objects.get(id=comment.employee_id)
-                employee_data = {
-                    'id': employee.id,
-                    'full_name': f"{employee.user_surename} {employee.user_name} {employee.user_patronymic or ''}".strip(),
-                    'photo': request.build_absolute_uri(employee.user_image.url) if employee.user_image else None,
-                }
-            except Employee.DoesNotExist:
-                employee_data = {
-                    'id': comment.employee_id,
-                    'full_name': None,
-                    'photo': None,
-                }
-
-            comments_data.append({
-                'id': comment.id,
-                'event_id': comment.event_id,
-                'employee': employee_data,
-                'text': comment.text,
-                'created_at': comment.created_at,
+        employees = Employee.objects.filter(birth_date__month=month)
+        # Группируем по дню месяца
+        birthdays_map = defaultdict(list)
+        for emp in employees:
+            day = emp.birth_date.day
+            birthdays_map[day].append({
+                "id": emp.id,
+                "full_name": f"{emp.first_name} {emp.last_name}",
+                "birth_date": emp.birth_date,
             })
 
-        # Собираем итоговый ответ
+        # Преобразуем в список с сортировкой по дню
+        result = [{"day": day, "employees": birthdays_map[day]} for day in sorted(birthdays_map)]
+
+        return Response({
+            "month": month,
+            "year": year,
+            "birthdays": result
+        })
+
+class EventDetailAPIView(APIView):
+    def get(self, request, event_id):
+        event = get_object_or_404(Event, id=event_id)
+        event_data = EventSerializer(event, context={'request': request}).data
+
+        # Подсчёт комментариев и лайков
+        comments = Comment.objects.filter(event_id=event.id).order_by('created_at')
+        comment_counts = comments.count()
+        like_counts = Like.objects.filter(event_id=event.id).count()
+
+        replies_map = defaultdict(list)
+        root_comments = []
+
+        for comment in comments:
+            if comment.comment_id:
+                replies_map[comment.comment_id].append(comment)
+            else:
+                root_comments.append(comment)
+
+        comments_data = CommentSerializer(
+            root_comments,
+            many=True,
+            context={'request': request, 'replies_map': replies_map}
+        ).data
+
+        # Формируем итоговый ответ
         event_data.update({
             'comments_count': comment_counts,
             'likes_count': like_counts,
@@ -230,31 +174,34 @@ class EventDetailAPIView(APIView):
 
 class LikeEventAPIView(APIView):
     def post(self, request):
-        event_id = request.data.get("event_id")
-        birthday_employee_id = request.data.get("birthday_employee_id")
-        birth_year = request.data.get("birth_year")
-        employee_id = request.data.get("employee_id")
+        print("=== LIKE EVENT API CALLED ===")
+        print("Request data:", request.data)
+        print("Request user:", request.user)
+        
+        serializer = LikeSerializer(data=request.data)
+        if not serializer.is_valid():
+            print("Serializer errors:", serializer.errors)  # <-- добавь это
+            return Response(serializer.errors, status=400)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        if not employee_id:
-            return Response({"error": "Missing employee_id"}, status=400)
-
-        if event_id:
-            like_filter = {"event_id": event_id, "employee_id": employee_id}
-        elif birthday_employee_id and birth_year:
-            like_filter = {
-                "birthday_employee_id": birthday_employee_id,
-                "birth_year": birth_year,
-                "employee_id": employee_id
-            }
+        if data.get("event_id"):
+            like_filter = {"event_id": data["event_id"], "employee_id": data["employee_id"]}
         else:
-            return Response({"error": "Missing event_id or birthday data"}, status=400)
+            like_filter = {
+                "birthday_employee_id": data["birthday_employee_id"],
+                "birth_year": data["birth_year"],
+                "employee_id": data["employee_id"]
+            }
 
         try:
             like = Like.objects.get(**like_filter)
             like.delete()
+            print("=== UNLIKED ===", like_filter)
             return Response({"message": "Unliked successfully"}, status=200)
         except Like.DoesNotExist:
             Like.objects.create(**like_filter)
+            print("=== LIKED ===", like_filter)
             return Response({"message": "Liked successfully"}, status=201)
 
 
@@ -286,70 +233,21 @@ class CheckLikeAPIView(APIView):
 
 class AddCommentAPIView(APIView):
     def post(self, request):
-        event_id = request.data.get("event_id")
-        birthday_employee_id = request.data.get("birthday_employee_id")
-        birth_year = request.data.get("birth_year")
-        employee_id = request.data.get("employee_id")
-        text = request.data.get("text")
-
-        # Проверка обязательных полей
-        if not employee_id or not text:
-            return Response({"error": "Missing required fields"}, status=400)
-
-        try:
-            employee = Employee.objects.get(id=employee_id)
-        except Employee.DoesNotExist:
-            return Response({"error": "Employee not found"}, status=404)
-
-        if event_id:
-            # Комментарий к событию
-            try:
-                event = Event.objects.get(id=event_id)
-            except Event.DoesNotExist:
-                return Response({"error": "Event not found"}, status=404)
-
-            comment = Comment.objects.create(
-                event_id=event.id,
-                employee_id=employee.id,
-                text=text
-            )
-
+        serializer = AddCommentSerializer(data=request.data)
+        if serializer.is_valid():
+            comment = serializer.save()
             return Response({
-                "message": "Event comment added successfully",
-                "comment": {
-                    "id": comment.id,
-                    "event_id": comment.event_id,
-                    "employee_id": comment.employee_id,
-                    "text": comment.text,
-                    "created_at": comment.created_at,
-                }
+                "message": "Comment added successfully",
+                "comment": AddCommentSerializer(comment).data
             }, status=201)
-
-        elif birthday_employee_id and birth_year:
-            # Комментарий ко дню рождения
-            comment = Comment.objects.create(
-                birthday_employee_id=birthday_employee_id,
-                birth_year=birth_year,
-                employee_id=employee.id,
-                text=text
-            )
-
-            return Response({
-                "message": "Birthday comment added successfully",
-                "comment": {
-                    "id": comment.id,
-                    "birthday_employee_id": comment.birthday_employee_id,
-                    "birth_year": comment.birth_year,
-                    "employee_id": comment.employee_id,
-                    "text": comment.text,
-                    "created_at": comment.created_at,
-                }
-            }, status=201)
-
         else:
+            # Возвращаем подробности при ошибке
             return Response({
-                "error": "You must provide either event_id or (birthday_employee_id and birth_year)"
+                "message": "Validation failed",
+                "errors": serializer.errors,
+                "data_received": request.data
             }, status=400)
+
 
 class BirthdayCommentsAPIView(APIView):
     def get(self, request):
@@ -362,127 +260,69 @@ class BirthdayCommentsAPIView(APIView):
         comments = Comment.objects.filter(
             birthday_employee_id=birthday_employee_id,
             birth_year=birth_year,
-            event_id__isnull=True
+            event_id__isnull=True,
+            comment_id__isnull=True  # только корневые
         ).order_by('created_at')
 
-        # Создаём мапу по ID
-        comment_map = {}
-        comment_tree = {}
-        root_comments = []
+        serializer = CommentSerializer(comments, many=True, context={'request': request})
+        return Response(serializer.data, status=200)
 
-        for comment in comments:
-            try:
-                employee = Employee.objects.get(id=comment.employee_id)
-                employee_data = {
-                    'id': employee.id,
-                    'full_name': f"{employee.user_surename} {employee.user_name} {employee.user_patronymic or ''}".strip(),
-                    'photo': request.build_absolute_uri(employee.user_image.url) if employee.user_image else None,
-                }
-            except Employee.DoesNotExist:
-                employee_data = {
-                    'id': comment.employee_id,
-                    'full_name': None,
-                    'photo': None,
-                }
+class UpdateBirthdayMessageUsedAPIView(APIView):
+    def put(self, request):
+        employee_id = request.data.get('birthday_employee_id')
+        birth_year = request.data.get('birth_year')
+        new_message_id = request.data.get('message_id')
 
-            comment_data = {
-                'id': comment.id,
-                'birthday_employee_id': comment.birthday_employee_id,
-                'birth_year': comment.birth_year,
-                'employee': employee_data,
-                'text': comment.text,
-                'created_at': comment.created_at,
-                'replies': []
-            }
+        if not all([employee_id, birth_year, new_message_id]):
+            return Response({"message": "Необходимо указать birthday_employee_id, birth_year и message_id"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Проверяем существует ли сообщение
+        new_message = get_object_or_404(BirthdayMessage, id=new_message_id)
 
-            comment_map[comment.id] = comment_data
-
-            if comment.comment_id:
-                # Это ответ на комментарий
-                parent = comment_map.get(comment.comment_id)
-                if parent:
-                    parent['replies'].append(comment_data)
-                else:
-                    # Если родитель ещё не загружен, временно отложим
-                    comment_tree.setdefault(comment.comment_id, {'replies': []})['replies'].append(comment_data)
-            else:
-                root_comments.append(comment_data)
-
-        return Response(root_comments, status=200)
-
-class AddBirthdayCommentAPIView(APIView):
-    def post(self, request):
-        birthday_employee_id = request.data.get("birthday_employee_id")
-        birth_year = request.data.get("birth_year")
-        employee_id = request.data.get("employee_id")
-        text = request.data.get("text")
-
-        if not birthday_employee_id or not birth_year or not employee_id or not text:
-            return Response({"error": "Missing required fields"}, status=400)
-
-        try:
-            employee = Employee.objects.get(id=employee_id)
-        except Employee.DoesNotExist:
-            return Response({"error": "Employee not found"}, status=404)
-
-        comment = Comment.objects.create(
-            birthday_employee_id=birthday_employee_id,
+        # Получаем или создаем запись
+        obj, created = BirthdayMessageUsed.objects.update_or_create(
+            birthday_employee_id=employee_id,
             birth_year=birth_year,
-            employee_id=employee.id,
-            text=text
+            defaults={'message': new_message}
         )
 
         return Response({
-            "message": "Birthday comment added successfully",
-            "comment": {
-                "id": comment.id,
-                "birthday_employee_id": comment.birthday_employee_id,
-                "birth_year": comment.birth_year,
-                "employee_id": comment.employee_id,
-                "text": comment.text,
-                "created_at": comment.created_at,
-            }
-        }, status=status.HTTP_201_CREATED)
+            "message": "Сообщение успешно обновлено" if not created else "Сообщение создано",
+            "birthday_employee_id": obj.birthday_employee_id,
+            "birth_year": obj.birth_year,
+            "message_id": obj.message.id,
+            "text_ru": obj.message.text_ru,
+            "text_kz": obj.message.text_kz
+        })
+
+class BirthdayMessagesListAPIView(APIView):
+    def get(self, request):
+        messages = BirthdayMessage.objects.all().order_by('created_at')
+        serializer = BirthdayMessageSerializer(messages, many=True)
+        return Response(serializer.data)
 
 class ReplyToCommentAPIView(APIView):
     def post(self, request):
-        comment_id = request.data.get("comment_id")
-        text = request.data.get("text")
-        employee_id = request.data.get("employee_id")
-        event_id = request.data.get("event_id")
-        birthday_employee_id = request.data.get("birthday_employee_id")
-        birth_year = request.data.get("birth_year")
-
-        if not comment_id or not employee_id or not text:
-            return Response({"error": "Missing required fields"}, status=400)
-
+        serializer = AddCommentSerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response({
+                "message": "Validation failed",
+                "errors": serializer.errors,
+                "data_received": request.data
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        employee_id = serializer.validated_data.get("employee_id")
         try:
-            employee = Employee.objects.get(id=employee_id)
+            Employee.objects.get(id=employee_id)
         except Employee.DoesNotExist:
-            return Response({"error": "Employee not found"}, status=404)
-
-        # Создание ответа на комментарий
-        comment = Comment.objects.create(
-            comment_id=comment_id,
-            employee_id=employee.id,
-            text=text,
-            event_id=event_id if event_id else None,
-            birthday_employee_id=birthday_employee_id if birthday_employee_id else None,
-            birth_year=birth_year if birth_year else None,
-        )
-
+            return Response({"error": "Employee not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        comment = serializer.save()
+        
         return Response({
             "message": "Reply added successfully",
-            "reply": {
-                "id": comment.id,
-                "comment_id": comment.comment_id,
-                "employee_id": comment.employee_id,
-                "event_id": comment.event_id,
-                "birthday_employee_id": comment.birthday_employee_id,
-                "birth_year": comment.birth_year,
-                "text": comment.text,
-                "created_at": comment.created_at,
-            }
+            "reply": AddCommentSerializer(comment).data
         }, status=status.HTTP_201_CREATED)
 
 class GetDailyQuoteAPIView(APIView):
@@ -500,7 +340,6 @@ class GetDailyQuoteAPIView(APIView):
 
         current_date = date.fromisoformat(date_str) if date_str else now().date()
 
-        # Проверяем, есть ли уже назначенная цитата на эту дату
         try:
             used = QuoteMessageUsed.objects.get(employee_id=employee_id, date_used=current_date)
         except QuoteMessageUsed.DoesNotExist:
@@ -511,14 +350,12 @@ class GetDailyQuoteAPIView(APIView):
             if not all_quotes:
                 return Response({'error': 'No quotes available'}, status=status.HTTP_404_NOT_FOUND)
 
-            # Проверяем, какие цитаты уже использованы другими в этот день
             used_ids_today = set(
                 QuoteMessageUsed.objects.filter(date_used=current_date)
                 .values_list('message_id', flat=True)
             )
             available_quotes = [q for q in all_quotes if q.id not in used_ids_today]
 
-            # Если все использованы — применим fallback: выдать по индексу
             if not available_quotes:
                 index = employee_id % len(all_quotes)
                 selected = all_quotes[index]

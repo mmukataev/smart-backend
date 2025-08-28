@@ -6,7 +6,7 @@ from django.shortcuts import render
 # Create your views here.
 
 # your_app/views.py
-import requests 
+import requests
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser
@@ -19,7 +19,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import TokenError
 
-from django.http import JsonResponse 
+from django.http import JsonResponse
 from rest_framework.decorators import api_view, parser_classes, permission_classes
 import jwt
 from django.conf import settings
@@ -79,12 +79,124 @@ from .models import Employee
 from .serializers import EmployeeSearchSerializer
 from django.db.models import Q
 import logging
+import urllib3
 
+from requests.auth import HTTPBasicAuth
 from django.http import HttpResponse
+
+from .utils import send_verification_email
+from .utils import verify_token
+from django.shortcuts import redirect
+from django.http import HttpResponseBadRequest
+from django.http import HttpResponseRedirect
 
 logger = logging.getLogger(__name__)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from django.http import HttpResponse
+
+
+AGU_API_URL = "http://192.168.10.195:8001/api/v1/events/by-iin/"
+
+@api_view(['GET'])
+def events_by_iin(request, iin):
+    """
+    Получение событий по ИИН через AGU API
+    """
+    login = settings.AGU_API_LOGIN
+    password = settings.AGU_API_PASSWORD
+
+    response = requests.get(
+        f"{AGU_API_URL}{iin}",
+        auth=HTTPBasicAuth(login, password)
+    )
+
+    if response.status_code != 200:
+        return Response({"error": "Не удалось получить данные с AGU"}, status=response.status_code)
+
+    return Response(response.json())
+
+class EmployeeByEmailAPIView(APIView):
+    def get(self, request):
+        email = request.query_params.get("email")
+        if not email:
+            return Response({"error": "email is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            employee = Employee.objects.get(user_email=email)
+        except Employee.DoesNotExist:
+            return Response({"error": "Employee not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = EmployeeSerializer(employee)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+            
+def admission_proxy(request):
+    token = request.GET.get("token")
+    if not token:
+        return JsonResponse({"error": "Token query parameter required"}, status=400)
+
+    url = "https://admission.apa.kz/api/check_access"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10, verify=False)
+        response.raise_for_status()
+
+        content_type = response.headers.get("Content-Type", "")
+
+        # Если это JSON
+        if "application/json" in content_type:
+            try:
+                data = response.json()
+            except ValueError:
+                return JsonResponse({"error": "Invalid JSON from admission"}, status=502)
+
+            user_link = data.get("userLink")
+            return JsonResponse({"userLink": user_link})
+
+        # Если это HTML или другой тип — просто отдаем как есть
+        proxy_response = HttpResponse(response.content, status=response.status_code)
+        proxy_response["Content-Type"] = content_type
+        return proxy_response
+
+    except requests.Timeout:
+        return JsonResponse({"error": "Admission request timed out"}, status=504)
+    except requests.RequestException as e:
+        return JsonResponse({"error": f"Admission request failed: {str(e)}"}, status=502)
+
+def icademium_proxy(request):
+    token = request.GET.get("token")
+    if not token:
+        return JsonResponse({"error": "Token query parameter required"}, status=400)
+
+    url = "https://icademium.apa.kz/api/check_access"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10, verify=False)
+        response.raise_for_status()
+
+        content_type = response.headers.get("Content-Type", "")
+
+        # Если это JSON
+        if "application/json" in content_type:
+            try:
+                data = response.json()
+            except ValueError:
+                return JsonResponse({"error": "Invalid JSON from icademium"}, status=502)
+
+            user_link = data.get("userLink")
+            return JsonResponse({"userLink": user_link})
+
+        # Если это HTML или другой тип — просто отдаем как есть
+        proxy_response = HttpResponse(response.content, status=response.status_code)
+        proxy_response["Content-Type"] = content_type
+        return proxy_response
+
+    except requests.Timeout:
+        return JsonResponse({"error": "Icademium request timed out"}, status=504)
+    except requests.RequestException as e:
+        return JsonResponse({"error": f"Icademium request failed: {str(e)}"}, status=502)
 
 def smartcloud_proxy(request):
     token = request.GET.get("token")
@@ -165,7 +277,7 @@ class AutorizeView(APIView):
             admission_user, _ = AdmissionUserRole.objects.get_or_create(login=login)
             regtesting_user, _ = RegtestingUserRole.objects.get_or_create(login=login)
             icademium_user, _ = IcademiumUserRole.objects.get_or_create(login=login)
-            
+
             try:
                 chat_token, chat_uid = get_rocketchat_token(login, password)
             except Exception as e:
@@ -191,7 +303,7 @@ class AutorizeView(APIView):
                 regapa_user.region = 20
 
             employee = Employee.objects.filter(user_email=user.login).first()
-            
+
             token = AccessToken.for_user(user)
             token["username"] = user.login
             # Full name & objectGUID from AD
@@ -217,7 +329,7 @@ class AutorizeView(APIView):
             #    #'access': str(token.access_token),
             #    #'refresh': str(refresh),
             #})
-            
+
             #response = Response({'status': 'login successful', 'access': str(token)}, status=status.HTTP_200_OK)
             #response = Response({'status': 'login successful', 'access': str(token),
             #                     'chattoken':str(chat_token), 'chatuserid':str(chat_uid), 'chatlist':lst,
@@ -238,7 +350,7 @@ class AutorizeView(APIView):
             )
 
             return response
-        
+
         # Hardcoded login check
         #if login == "j.depp@apa.kz" and password == "Academy2024$!":
         #    # Create a dummy user-like object for token creation
@@ -258,8 +370,8 @@ class AutorizeView(APIView):
         #        'access': str(refresh.access_token),
         #        'refresh': str(refresh),
         #    })
-        
-        return Response({'status': 'failure', 'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)		
+
+        return Response({'status': 'failure', 'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 class AutorizeRefreshView(APIView):
@@ -281,7 +393,7 @@ class AutorizeRefreshView(APIView):
             })
 
         except TokenError as e:
-            return Response({'status': 'failure', 'error': 'Invalid or expired refresh token.'}, status=status.HTTP_401_UNAUTHORIZED)		
+            return Response({'status': 'failure', 'error': 'Invalid or expired refresh token.'}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 @api_view(['GET'])
@@ -296,6 +408,10 @@ def check_autorize(request):
 
         employee = Employee.objects.filter(user_email=user.login).first()
         image_url = employee.user_image.url if employee and employee.user_image else None
+        position_kz = employee.position.kz if employee and employee.position else "asd"
+        position_ru = employee.position.ru if employee and employee.position else "asd"
+        position_display = f"{position_kz} / {position_ru}" if position_kz or position_ru else None
+
 
         return JsonResponse({
             'authorized': True,
@@ -308,6 +424,9 @@ def check_autorize(request):
             'user_name': employee.user_name if employee else None,
             'user_surename': employee.user_surename if employee else None,
             'user_patronymic': employee.user_patronymic if employee else None,
+            'position_kz': position_kz,
+            'position_ru': position_ru,
+            'position_display': position_display,
         })
 
     except jwt.ExpiredSignatureError:
@@ -377,16 +496,16 @@ def logout_view(request):
 class SubordinationListAPIView(generics.ListAPIView):
     queryset = Subordination.objects.all()
     serializer_class = SubordinationSerializer
-    
+
 class SubordinationDetailAPIView(generics.RetrieveAPIView):
     queryset = Subordination.objects.all()
     serializer_class = SubordinationSerializer
-    
+
 # Department
 class DepartmentListAPIView(generics.ListAPIView):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
-    
+
 class DepartmentDetailAPIView(generics.RetrieveAPIView):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
@@ -395,19 +514,19 @@ class DepartmentDetailAPIView(generics.RetrieveAPIView):
 class SectorListAPIView(generics.ListAPIView):
     queryset = Sector.objects.all()
     serializer_class = SectorSerializer
-    
+
 class SectorDetailAPIView(generics.RetrieveAPIView):
     queryset = Sector.objects.all()
     serializer_class = SectorSerializer
-    
+
 # Position
 class PositionListAPIView(generics.ListAPIView):
     queryset = Position.objects.all()
     serializer_class = PositionSerializer
-    
+
 class PositionDetailAPIView(generics.RetrieveAPIView):
     queryset = Position.objects.all()
-    serializer_class = PositionSerializer    
+    serializer_class = PositionSerializer
 
 #class EmployeeSearchAPIView(generics.ListAPIView):
 #    serializer_class = EmployeeSerializer
@@ -434,11 +553,27 @@ class EmployeeSearchAPIView(generics.ListAPIView):
                 Q(user_patronymic__icontains=search_query)
             )
         else:
-            return Employee.objects.none()    
+            return Employee.objects.none()
 
+# views.py
 class EmployeeListAPIView(ListAPIView):
-    queryset = Employee.objects.all().select_related('department', 'sector', 'position', 'subordination')
     serializer_class = EmployeeSerializer
+
+    def get_queryset(self):
+        queryset = Employee.objects.all().select_related(
+            'department', 'sector', 'position', 'subordination'
+        )
+
+        # region_id может прийти либо через query params, либо через URL
+        region_id = self.kwargs.get('region_id') or self.request.query_params.get('region_id')
+        department_id = self.request.query_params.get('department_id')
+
+        if region_id:
+            queryset = queryset.filter(region_id=region_id)
+        if department_id:
+            queryset = queryset.filter(department_id=department_id)
+
+        return queryset
 
 
 class EmployeesByDepartmentView(APIView):
@@ -456,50 +591,50 @@ class EmployeesByDepartmentView(APIView):
 #         serializer = EmployeeSerializer(employees, many=True)
 #         return Response(serializer.data, status=status.HTTP_200_OK)
 
-        
-        
-        
+
+
+
 class DepartmentsBySubordinationView(APIView):
     def get(self, request, subordination_id):
         departments = Department.objects.filter(subordination_id=subordination_id)
         serializer = DepartmentSerializer(departments, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)            
-        
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 class EmployeeByIDView(APIView):
     def get(self, request, employee_id):
         employees = Employee.objects.filter(id=employee_id)
         serializer = EmployeeSerializer(employees, many=True)
         #serializer = EmployeeSerializerLight(employees, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)        
-        
-        
-        
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+
 # Region
 class RegionListAPIView(generics.ListAPIView):
     queryset = Region.objects.all()
     serializer_class = RegionSerializer
-    
+
 class RegionDetailAPIView(generics.RetrieveAPIView):
     queryset = Region.objects.all()
-    serializer_class = RegionSerializer        
-    
-    
-    
+    serializer_class = RegionSerializer
+
+
+
 @api_view(['GET'])
 def regions_list(request):
     directors = RegionEmployee.objects.filter(position_id=8)
     serializer = RegionEmployeeSerializer(directors, many=True)
-    return Response(serializer.data)    
-    
-    
+    return Response(serializer.data)
+
+
 class EmployeesByRegionView(APIView):
     def get(self, request, region_id):
         employees = RegionEmployee.objects.filter(region_id=region_id).exclude(position_id=8)
         #serializer = RegionEmployeeSerializer(employees, many=True)
         serializer = RegionEmployeeSerializerLigth(employees, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)    
-        
-        
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 class RegionEmployeeSearchAPIView(generics.ListAPIView):
     serializer_class = RegionEmployeeSerializer
 
@@ -577,3 +712,163 @@ class EmployeeByEmailAPIView(APIView):
 #
 #     except Exception as e:
 #         return JsonResponse({'error': str(e)}, status=500)
+
+
+
+def verify_email(request):
+    token = request.GET.get("token")
+    print(token)
+    email = verify_token(token)
+    print(email)
+    if not email:
+        return HttpResponseBadRequest("Invalid or expired link.")
+
+    user = SmartApaUser.objects.get(login=email)
+
+    if user:
+        user.is_email_verified = True
+        user.save()
+
+        # collect all user data from database
+        byuropass_user, _ = ByuropassUserRole.objects.get_or_create(login=email)
+        regapa_user, _ = RegApaUserRole.objects.get_or_create(login=email)
+        admission_user, _ = AdmissionUserRole.objects.get_or_create(login=email)
+        regtesting_user, _ = RegtestingUserRole.objects.get_or_create(login=email)
+        icademium_user, _ = IcademiumUserRole.objects.get_or_create(login=email)
+
+        # we have no password :(
+        chat_token = None
+        chat_uid = None
+        lst = []
+
+        # crutch!
+        if regapa_user.region == 40:
+            regapa_user.region = 20
+
+        employee = Employee.objects.filter(user_email=user.login).first()
+
+        token = AccessToken.for_user(user)
+        token["username"] = user.login
+        # Full name & objectGUID from AD
+        token["guid"] = user.object_guid
+        token["display_name"] = user.display_name
+        # Full name from Employee Table
+        token["employee_name"] = employee.user_name if employee else None
+        token["employee_surename"] = employee.user_surename if employee else None
+        token["employee_patronymic"] = employee.user_patronymic if employee else None
+        # is_chief from Employee Table
+        token["is_chief"] = employee.is_chief if employee else None
+        # Add roles
+        token["byuropass_role"] = byuropass_user.role
+        token["regapa_role"] = regapa_user.role
+        token["regapa_region"] = regapa_user.region
+        token["admission_role"] = admission_user.role
+        token["regtesting_role"] = regtesting_user.role
+        token["icademium_role"] = icademium_user.role
+
+        # response = Response({'status': 'login successful', 'access': str(token),
+        #                      'chattoken': str(chat_token), 'chatuserid': str(chat_uid), 'chatlist': lst},
+        #                     status=status.HTTP_200_OK)
+
+        response = HttpResponseRedirect("https://smart.apa.kz/kz/home/")
+        # Set the token in HttpOnly cookie
+        response.set_cookie(
+            key='access_token',
+            value=str(token),
+            domain='.apa.kz',
+            path='/',
+            httponly=False,
+            secure=True,  # False, set to True in production
+            samesite='None',  # 'Lax' or 'Strict', or 'None'
+            max_age=3600,  # 900 - 15min, 3600 - 1 hour
+        )
+
+        # Redirect to login page or auto-login
+        # return redirect("https://devsmart.apa.kz")
+        # return redirect("https://smart.apa.kz/kz/home")
+        return response
+
+    return HttpResponseBadRequest("User not found.")
+
+class AutorizeView1(APIView):
+    def post(self, request):
+        login = request.data.get("login")
+        password = request.data.get("password")
+
+        if not login or not password:
+            return Response({'status': 'failure', 'error': 'Missing login or password'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate1(login, password)
+
+        if user is not None:
+
+            if not user.is_email_verified:
+                send_verification_email(user)
+                #return JsonResponse({"message": "Verification email sent. Please check your inbox."})
+                return JsonResponse({'status': 'need verification', 'error':'Verification email sent. Please check your inbox.'})
+
+
+
+            byuropass_user, _ = ByuropassUserRole.objects.get_or_create(login=login)
+            regapa_user, _ = RegApaUserRole.objects.get_or_create(login=login)
+            admission_user, _ = AdmissionUserRole.objects.get_or_create(login=login)
+            regtesting_user, _ = RegtestingUserRole.objects.get_or_create(login=login)
+            icademium_user, _ = IcademiumUserRole.objects.get_or_create(login=login)
+
+            try:
+                chat_token, chat_uid = get_rocketchat_token(login, password)
+            except Exception as e:
+                # Handle any connection or unexpected errors gracefully
+                print(f"[ERROR] Failed to get Rocket.Chat token: {e}")
+                chat_token = None
+                chat_uid = None
+
+            # chat_token, chat_uid = get_rocketchat_token(login, password)
+            if chat_token is not None:
+                lst = get_last_conversations(chat_token, chat_uid, login)
+            else:
+                lst = []
+
+            # crutch!
+            if regapa_user.region == 40:
+                regapa_user.region = 20
+
+            employee = Employee.objects.filter(user_email=user.login).first()
+
+            token = AccessToken.for_user(user)
+            token["username"] = user.login
+            # Full name & objectGUID from AD
+            token["guid"] = user.object_guid
+            token["display_name"] = user.display_name
+            # Full name from Employee Table
+            token["employee_name"] = employee.user_name if employee else None
+            token["employee_surename"] = employee.user_surename if employee else None
+            token["employee_patronymic"] = employee.user_patronymic if employee else None
+            # is_chief from Employee Table
+            token["is_chief"] = employee.is_chief if employee else None
+            # Add roles
+            token["byuropass_role"] = byuropass_user.role
+            token["regapa_role"] = regapa_user.role
+            token["regapa_region"] = regapa_user.region
+            token["admission_role"] = admission_user.role
+            token["regtesting_role"] = regtesting_user.role
+            token["icademium_role"] = icademium_user.role
+
+            response = Response({'status': 'login successful', 'access': str(token),
+                                 'chattoken':str(chat_token), 'chatuserid':str(chat_uid), 'chatlist':lst}, status=status.HTTP_200_OK)
+
+            # Set the token in HttpOnly cookie
+            response.set_cookie(
+                key='access_token',
+                value=str(token),
+                domain='.apa.kz',
+                path='/',
+                httponly=False,
+                secure=True,  # False, set to True in production
+                samesite='None',  # 'Lax' or 'Strict', or 'None'
+                max_age=3600,  # 900 - 15min, 3600 - 1 hour
+            )
+
+            return response
+
+        return Response({'status': 'failure', 'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)

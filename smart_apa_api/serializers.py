@@ -152,4 +152,4 @@ class RegionEmployeeSerializerLigth(serializers.ModelSerializer):
 
     class Meta:
         model = RegionEmployee
-        fields = '__all__'        
+        fields = '__all__'       

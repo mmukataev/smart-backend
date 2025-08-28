@@ -27,12 +27,19 @@ from import_export.formats.base_formats import XLSX
 
 @admin.register(SmartApaUser)
 class SmartApaUserAdmin(admin.ModelAdmin):
-    #exclude = ('password_hash',)
     search_fields = ['login', 'role', 'display_name', 'title', 'department']
+    list_display = ('login', 'display_name', 'role', 'is_email_verified', 'last_login', 'last_logout')
+    list_editable = ('is_email_verified',)  # редактируем прямо в списке
     readonly_fields = ('login', 'display_name', 'title', 'department', 'last_login', 'last_logout')
-    fields = ('login', 'role', 'display_name', 'title', 'department', 'last_login', 'last_logout', 'last_ad_check', 'blocked_until', 'bad_pwd_count', 'is_active')
+    fields = (
+        'login', 'role', 'display_name', 'title', 'department',
+        'last_login', 'last_logout', 'last_ad_check', 'blocked_until',
+        'bad_pwd_count', 'is_active', 'is_email_verified'  # <-- добавлено
+    )
+
     def has_add_permission(self, request):
-        return False  # Disables the add button
+        return False  # запрет на добавление новых
+
 
 
 @admin.register(ByuropassUserRole)
@@ -84,13 +91,13 @@ class IcademiumUserRoleAdmin(admin.ModelAdmin):
 class EmployeeResource(resources.ModelResource):
     class Meta:
         model = Employee
-        fields = ('id', 'user_name', 'user_surename', 'user_patronymic', 'subordination', 'region', 'department', 'sector', 'position', 'user_phone', 'user_email', 'user_image','birth_date', 'work_start_date','is_chief','is_sector_head')
+        fields = ('id', 'user_name', 'user_surename', 'user_patronymic', 'subordination', 'region', 'department', 'sector', 'position', 'user_phone', 'user_email', 'user_image','birth_date', 'work_start_date','is_chief','is_sector_head','region_id')
         
 @admin.register(Employee)
 class EmployeeAdmin(ImportExportModelAdmin):
     resource_class = EmployeeResource
     #list_display = ('user_name', 'user_surename', 'user_patronymic', 'subordination', 'region', 'department', 'sector', 'position', 'user_phone')
-    list_display = ('user_name', 'user_surename', 'user_patronymic', 'subordination', 'department', 'sector', 'position', 'user_phone', 'user_email', 'user_image','birth_date','work_start_date','is_chief','is_sector_head')
+    list_display = ('user_name', 'user_surename', 'user_patronymic', 'subordination', 'department', 'sector', 'position', 'user_phone', 'user_email', 'user_image','birth_date','work_start_date','is_chief','is_sector_head','region_id')
     #search_fields = ('user_name', 'user_surename', 'user_patronymic', 'subordination', 'region', 'department', 'sector', 'position', 'user_phone')
     #search_fields = ('user_name', 'user_surename', 'user_patronymic', 'user_phone')
     search_fields = ('user_name', 'user_surename', 'user_patronymic', 'user_phone', 'user_email')

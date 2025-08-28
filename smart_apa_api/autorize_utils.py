@@ -16,18 +16,18 @@ class DummyUser:
 def authenticate1(login, password):
     try:
 
-        email_list = [
-            "d.bolatbek@apa.kz",
-            "alua.makhat@apa.kz",
-            "m.mukataev@apa.kz",
-            "s.ualbekov@apa.kz",
-            "k.kulynchakov@apa.kz",
-            "a.kerimbayev@apa.kz",
-            "test@apa.kz"
-        ]
+        # email_list = [
+        #     "d.bolatbek@apa.kz",
+        #     "alua.makhat@apa.kz",
+        #     "m.mukataev@apa.kz",
+        #     "s.ualbekov@apa.kz",
+        #     "k.kulynchakov@apa.kz",
+        #     "a.kerimbayev@apa.kz",
+        #     "test@apa.kz"
+        # ]
         
-        if login not in email_list:
-            return None
+        # if login not in email_list:
+        #     return None
 
         user = SmartApaUser.objects.get(login=login)
     except SmartApaUser.DoesNotExist:

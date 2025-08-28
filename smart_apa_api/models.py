@@ -25,6 +25,8 @@ class SmartApaUser(models.Model):
     last_logout = models.DateTimeField(null=True, blank=True)
 
     is_active = models.BooleanField(default=True)
+    
+    is_email_verified = models.BooleanField(default=False)
 
     # This will exist only in memory, not in DB
     _object_guid = None  
@@ -306,6 +308,8 @@ class Employee(models.Model):
     work_start_date = models.DateField(blank=True, null=True, verbose_name="Дата начала работы")
     is_chief = models.BooleanField(default=False, verbose_name="Является начальником")
     is_sector_head = models.BooleanField(default=False, verbose_name="Заведующий сектором") 
+    region_id = models.IntegerField(blank=True, null=True)
+    iin = models.CharField(max_length=12, blank=True, null=True)
 
     # Связь с UserRole по user_email = login
     # user_role = models.ForeignKey(
@@ -328,16 +332,22 @@ class Employee(models.Model):
         
 
 # Region Region
+from django.db import models
+
 class Region(models.Model):
-    kz = models.CharField(max_length=200)
-    ru = models.CharField(max_length=200, blank=True, null=True)
+    kz = models.CharField(max_length=200)   # Область на казахском
+    ru = models.CharField(max_length=200, blank=True, null=True)  # Область на русском
+    city_kz = models.CharField(max_length=200, default="Не указано")
+    city_ru = models.CharField(max_length=200, blank=True, null=True, default="Не указано")
 
     class Meta:
-        verbose_name = "Regions"
+        verbose_name = "Region"
         verbose_name_plural = "8.1. Regions Table"
 
     def __str__(self):
-        return self.kz        
+        # Чтобы в админке видно было и область, и город
+        return f"{self.kz} / {self.city_kz}"
+
         
 # Region Department        
 class RegionDepartment(models.Model):

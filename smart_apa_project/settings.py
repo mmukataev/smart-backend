@@ -43,6 +43,10 @@ SIMPLE_JWT = {
 }
 
 
+
+AGU_API_LOGIN = "api@admin.kz"
+AGU_API_PASSWORD = "zaq1!QAZ"
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
@@ -52,6 +56,7 @@ ALLOWED_HOSTS = ['devsmart.apa.kz', 'devapi-smart.apa.kz', 'mzhd.apa.kz', 'local
 
 CSRF_TRUSTED_ORIGINS = [
     'https://devapi-smart.apa.kz',
+    'https://booking.apa.kz',
 ]
 
 # Application definition
@@ -109,6 +114,11 @@ CORS_ALLOWED_ORIGINS = [
     "https://academyconference30.apa.kz",
     "http://academyconference.apa.kz",
     "http://hc.apa.kz",
+    "https://helpdesk.apa.kz",
+    "http://helpdesk.test",
+    "http://192.168.10.138:8087",
+    "http://localhost:8087",
+    "http://localhost:5059",
 ]
 #CORS_ALLOW_ALL_ORIGINS = True
 ROOT_URLCONF = 'smart_apa_project.urls'
